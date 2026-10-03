@@ -1,5 +1,6 @@
 import asyncio
 import os
+from uuid import uuid4
 
 from creator_search.content_search import ContentSearch
 from creator_search.infrai_client import InfraiClient
@@ -9,9 +10,11 @@ from creator_search.models import CreatorContent
 async def main() -> None:
     client = InfraiClient(os.environ["INFRAI_API_KEY"])
     search = ContentSearch(client, os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"))
+    collection = f"creator-content-demo-{uuid4().hex}"
+    print(f"Using collection: {collection}")
     try:
         await search.index(
-            "creator-content-demo",
+            collection,
             [
                 CreatorContent(
                     content_id="asset-color-pack",
@@ -30,7 +33,7 @@ async def main() -> None:
             ],
         )
         hits = await search.search(
-            "creator-content-demo", "Where is my warm color download?", "creator-42", 3
+            collection, "Where is my warm color download?", "creator-42", 3
         )
         for hit in hits:
             print(hit.model_dump_json())

@@ -1,6 +1,25 @@
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol
 
-from creator_search.models import CreatorContent, SearchHit
+
+ContentKind = Literal["digital_asset_delivery", "subscriber_update"]
+
+
+class CreatorContent(Protocol):
+    content_id: str
+    creator_id: str
+    kind: ContentKind
+    title: str
+    body: str
+
+
+@dataclass(frozen=True)
+class SearchHit:
+    content_id: str
+    score: float
+    kind: ContentKind
+    title: str
+    next_action: Literal["open_download", "read_update"]
 
 
 class ContentSearch:
@@ -16,7 +35,12 @@ class ContentSearch:
                 {
                     "id": item.content_id,
                     "values": embedding,
-                    "metadata": item.model_dump(exclude={"body"}),
+                    "metadata": {
+                        "content_id": item.content_id,
+                        "creator_id": item.creator_id,
+                        "kind": item.kind,
+                        "title": item.title,
+                    },
                 }
             )
         await self._backend.create_collection(collection, len(vectors[0]["values"]))
