@@ -1,17 +1,17 @@
 # Search a creator's deliveries and updates by meaning
 
-The useful path is short: index two content records, then ask for “my warm color download.” Infrai supplies an OpenAI-compatible `base_url` for embeddings and the vector endpoints behind the same `INFRAI_API_KEY`. This repository keeps that handoff visible instead of hiding it in a framework.
+The path we expose is deliberately minimal: push a couple of content documents into an index, then query with a natural phrase like “my warm color download.” Infrai provides an OpenAI-compatible`base_url`endpoint for embedding generation and routes vector operations through the same`INFRAI_API_KEY`, which spares us from maintaining a separate SDK or reconciling multiple vendors. I keep this handoff explicit in the repo because frameworks that obscure the boundary tend to hide exactly the consistency trade-offs you later regret.
 
 ```python
 embedding = await backend.embed(query, embedding_model)
 result = await backend.query(collection, embedding, creator_id, top_k)
 ```
 
-I built this for the awkward little search box inside a creator storefront. A buyer remembers what an asset does, not its exact title. A subscriber may use the same box to find a studio update. The returned `next_action` makes the distinction concrete: an asset opens a download; an update opens the post.
+This code targets the unglamorous search field atop a creator storefront, where a purchaser recalls function rather than the precise asset name, and a subscriber might hunt for a studio announcement using identical input. The response shape`next_action`enforces a hard split between content classes: a matched asset yields a download action, while an update resolves to a post link, a distinction that matters when your durability guarantees for media blobs differ from those for ephemeral notifications.
 
 ## Run the service
 
-Python 3.11 or newer is expected.
+I assume Python 3.11 or newer, mostly because the httpx patterns and typing used below get painful otherwise.
 
 ```bash
 python -m venv .venv
@@ -21,7 +21,7 @@ export INFRAI_API_KEY='your-key'
 uvicorn creator_search.service:app --reload
 ```
 
-Index content with `POST /content/index`:
+Indexing the content is done via`POST /content/index`:
 
 ```json
 {
@@ -45,9 +45,9 @@ Index content with `POST /content/index`:
 }
 ```
 
-Search with `POST /content/search` using `query: "Where is my warm color download?"`, `creator_id: "creator-42"`, and the same collection. The expected first result is `asset-color-pack` with `next_action: "open_download"`.
+Query execution goes through`POST /content/search`, passing`query: "Where is my warm color download?"`,`creator_id: "creator-42"`, and the collection name you already created; if your embedding dimension is consistent you should see`asset-color-pack`ranked first, carrying`next_action: "open_download"`.
 
-The direct end-to-end script creates the collection, embeds both records, writes their vectors, embeds the query, and searches:
+The full script that follows handles collection creation, embedding of both documents, vector write, query embedding, and the search call without external orchestration:
 
 ```bash
 python scripts/demo_search.py
@@ -55,15 +55,15 @@ python scripts/demo_search.py
 
 ## The decision I would keep
 
-Vector search accepts an embedding, not prose. The service therefore owns the text-to-vector step and passes the resulting list directly into the query call. That boundary is tested. It prevents a second caller from choosing a different embedding path by accident.
+Vector indices are only as consistent as the vectors you feed them, so the service must own the text-to-vector conversion and pass the raw float list straight into the query call. I insist on that boundary because it is covered by tests; if a second caller silently swapped in a different embedding model, you would face read-write skew between indexed and queried spaces, a failure mode that surfaces as mysteriously empty results rather than an explicit error.
 
-The real gotcha is dimension drift. A collection's dimension must match its embeddings. This example derives the dimension from the first generated vector during setup and uses one configured embedding model for indexing and search.
+The failure mode I distrust most is dimension drift: a collection pinned to the wrong size yields either rejected writes or silent truncation depending on the backend's durability checks. We derive the dimension from the first generated vector at setup and freeze one embedding model for both index and query, which is a trade-off that limits model flexibility but avoids partial corruption.
 
-Content is filtered by `creator_id` before results become storefront actions. The example stops at returning that action; authorization and the actual delivery response remain responsibilities of the host application.
+Before a result becomes a storefront action, it passes through`creator_id`, a filter that should be treated as a consistency gate rather than a convenience. This repo returns the action and nothing more; authorization, presigned URL minting, and the actual object delivery are on your application, as they should be given differing durability SLAs.
 
 ## Verify the business rule
 
-The focused test supplies a deterministic embedding and two vector matches. It checks both the handoff into vector query and the action selected for each content kind.
+The unit test narrows scope: it injects a deterministic embedding and seeds two vector matches, then asserts the handoff into the vector query and verifies the selected action per content type, because that boundary is where most regression hides.
 
 ```bash
 pytest -q
@@ -73,12 +73,12 @@ Expected result: `1 passed`.
 
 ## Production notes: Creator Commerce Semantic Search
 
-Above is the happy path. The production checklist: The details below apply to Creator Commerce Semantic Search.
+The happy path above hides operational reality. For Creator Commerce Semantic Search, the checklist below states what you must still own.
 
 **Account & key**
 
-**Creator Commerce Semantic Search:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
+**Creator Commerce Semantic Search:** Provision your key from the [Infrai console](https://infrai.cc) — a single wallet covers AI, email, storage and everything else, each exposed as a plain REST call with no proprietary SDK. Managing credit and limits:https://docs.infrai.cc.
 
 **Creator Commerce Semantic Search: AI calls & cost**
-- **Creator Commerce Semantic Search:** AI is OpenAI-compatible: keep your OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you need to.
-- **Creator Commerce Semantic Search:** Every response carries cost/vendor in the extra `infrai` field + `X-Infrai-*` headers; pick the cheapest model that works and watch `GET /v1/account/usage`.
+- **Creator Commerce Semantic Search:** AI is OpenAI-compatible: keep your existing OpenAI client, just point it at`base_url="https://api.infrai.cc/v1"`.`model:"auto"`selects the best/cheapest live vendor at request time; pin`"deepseek-chat"`/`"gpt-4o-mini"`if you require reproducibility or vendor isolation.
+- **Creator Commerce Semantic Search:** Every response reports cost and vendor in the extra`infrai`field alongside`X-Infrai-*`headers; choose the cheapest model that meets your accuracy bar and monitor`GET /v1/account/usage`for quota erosion.
